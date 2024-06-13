@@ -11,8 +11,8 @@ from torch.autograd import Variable
 
 def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mamba_features=307):
     # 'mamba_features=184' if we use Knowair dataset.
-    # 'mamba_features=307' if we use PEMS04 Dataste,.
-    # 'mamba_features=80' if we use HZ_Metro dataset. 
+    # 'mamba_features=307' if we use PEMS04_Dataset Dataste,.
+    # 'mamba_features=80' if we use HZ_Metro dataset.
     inputs, labels = next(iter(train_dataloader))
     [batch_size, step_size, fea_size] = inputs.size()
     input_dim = fea_size
@@ -30,7 +30,7 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
 
     kfgn_mamba = KFGN_Mamba(kfgn_mamba_args)
     kfgn_mamba.cuda()
-    
+
     loss_MSE = torch.nn.MSELoss()
     loss_L1 = torch.nn.L1Loss()
 

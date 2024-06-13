@@ -61,7 +61,7 @@ python main.py -dataset=know_air -model=STGmamba -mamba_features=184
 ```
 
 ```bash
-# PEMS04
+# PEMS04_Dataset
 python main.py -dataset=pems04 -model=STGmamba -mamba_features=307
 
 ```

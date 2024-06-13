@@ -10,7 +10,7 @@ parser = argparse.ArgumentParser(description='Train & Test STG_Mamba for traffic
 parser.add_argument('-dataset', type=str, default='know_air', help='which dataset to run [options: know_air, pems04, hz_metro]')
 # choose model
 parser.add_argument('-model', type=str, default='STGmamba', help='which model to train & test [options: STGmamba, lstm]')
-# choose number of node features. For PEMS04 dataset, you should set mamba_features=307; For Know_Air dataset, mamba_features=184; For HZ_Metro, mamba_features=80
+# choose number of node features. For PEMS04_Dataset dataset, you should set mamba_features=307; For Know_Air dataset, mamba_features=184; For HZ_Metro, mamba_features=80
 parser.add_argument('-mamba_features', type=int, default=307, help='number of features for the STGmamba model [options: 307,184,80]')
 
 args = parser.parse_args()
@@ -23,9 +23,9 @@ if args.dataset =='know_air':
     A = np.load('D:\pychramProjects\STG-Mamba\STG-Mamba-main\Know_Air\knowair_adj_mat.npy')
 
 elif args.dataset == 'pems04':
-    print("\nLoading PEMS04 data...")
-    speed_matrix = pd.read_csv('/root/STG_Mamba/PEMS04_Dataset/pems04_flow.csv',sep=',')
-    A = np.load('/root/STG_Mamba/PEMS04_Dataset/pems04_adj.npy')
+    print("\nLoading PEMS04_Dataset data...")
+    speed_matrix = pd.read_csv('D:\pychramProjects\STG-Mamba\STG-Mamba-main\PEMS04_Dataset\pems04_flow.csv',sep=',')
+    A = np.load('D:\pychramProjects\STG-Mamba\STG-Mamba-main\PEMS04_Dataset\pems04_adj.npy')
 
 elif args.dataset == 'hz_metro':
     print("\nLoading HZ-Metro data...")
@@ -35,12 +35,12 @@ elif args.dataset == 'hz_metro':
 
 print("\nPreparing train/test data...")
 #train_dataloader, valid_dataloader, test_dataloader, max_value_speed = PrepareDataset(speed_matrix, BATCH_SIZE=64)
-train_dataloader, valid_dataloader, test_dataloader, max_value = PrepareDataset(speed_matrix, BATCH_SIZE=48)
+train_dataloader, valid_dataloader, test_dataloader, max_value = PrepareDataset(speed_matrix, BATCH_SIZE=24)
 
 # models you want to use
 if args.model == 'STGmamba':
     print("\nTraining STGmamba model...")
-    STGmamba, STGmamba_loss = TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=100, mamba_features=args.mamba_features)
+    STGmamba, STGmamba_loss = TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=70, mamba_features=args.mamba_features)
     print("\nTesting STGmamba model...")
     results = TestSTG_Mamba(STGmamba, test_dataloader, max_value)
 

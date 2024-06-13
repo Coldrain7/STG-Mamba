@@ -2,27 +2,28 @@ import torch.utils.data as utils
 import numpy as np
 import torch
 
+
 def PrepareDataset(speed_matrix, BATCH_SIZE=48, seq_len=12, pred_len=12, train_propotion=0.7, valid_propotion=0.1):
     """ Prepare Train & Test datasets and dataloaders
 
     Convert traffic/weather/volume matrix to train and test dataset.
 
     Args:
-        speed_matrix: The whole spatial-temporal dataset matrix. (It doesn't necessarily means speed, but can also be flow or weather matrix). 
+        speed_matrix: The whole spatial-temporal dataset matrix. (It doesn't necessarily means speed, but can also be flow or weather matrix).
         seq_len: The length of input sequence.
         pred_len: The length of prediction sequence, match the seq_len for model compatibility.
     Return:
         Train_dataloader
         Test_dataloader
     """
-    time_len = speed_matrix.shape[0]
+    time_len = speed_matrix.shape[0]  # 行的长度，对应于数据表中即为时间数据的长度
     #max_speed = speed_matrix.max().max()
     #speed_matrix = speed_matrix / max_speed
 
     # MinMax Normalization Method.
-    max_speed = speed_matrix.max().max()
+    max_speed = speed_matrix.max().max()  # 
     min_speed = speed_matrix.min().min()
-    speed_matrix = (speed_matrix - min_speed)/(max_speed - min_speed)    
+    speed_matrix = (speed_matrix - min_speed) / (max_speed - min_speed)
 
     speed_sequences, speed_labels = [], []
     for i in range(time_len - seq_len - pred_len):
