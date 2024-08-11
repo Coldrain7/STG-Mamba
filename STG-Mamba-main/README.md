@@ -57,7 +57,8 @@ Using the following commands to Train/Test STG_Mamba model on `KnowAir`, `PEMS04
 ```bash
 # KnowAir
 python main.py -dataset=know_air -model=STGmamba -mamba_features=184
-
+# on laptop
+python main.py -dataset=know_air -model=STGmamba -mamba_features=184 -methods=laptop
 ```
 
 ```bash
@@ -65,7 +66,7 @@ python main.py -dataset=know_air -model=STGmamba -mamba_features=184
 python main.py -dataset=pems04 -model=STGmamba -mamba_features=307
 
 ```
-
+ 
 ```bash
 #HZ_Metro
 python main.py -dataset=hz_metro -model=STGmamba -mamba_features=80

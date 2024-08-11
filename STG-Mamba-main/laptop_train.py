@@ -1,15 +1,9 @@
 import time
-import numpy as np
-import math
-import pandas as pd
-import torch
 import torch.optim as optim
 from STGMamba import *
-from torch.utils.tensorboard import SummaryWriter
+
 from torch.autograd import Variable
-
-
-def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mamba_features=307):
+def laptop_train_mamba(model, train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mamba_features=307):
     # 'mamba_features=184' if we use Knowair dataset.
     # 'mamba_features=307' if we use PEMS04_Dataset Dataste,.
     # 'mamba_features=80' if we use HZ_Metro dataset.
@@ -19,17 +13,9 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
     input_dim = fea_size
     hidden_dim = fea_size
     output_dim = fea_size
-    kfgn_mamba_args = ModelArgs(
-        K=K,
-        A=torch.Tensor(A),
-        feature_size=A.shape[0],  # 特征数量
-        d_model=fea_size,  # hidden_dim is fea_size
-        n_layer=4,
-        features=mamba_features
-    )
     print(f'feature_size = {A.shape[0]}, d_model = {fea_size}, features = {mamba_features}')
     # 实际打印出的结果：feature_size = 184, d_model = 184, features = 184，三个值都一样
-    kfgn_mamba = KFGN_Mamba(kfgn_mamba_args)
+    kfgn_mamba = model
     kfgn_mamba.cuda()  # 似乎不是推荐的代码，以下是更推荐的写法
     # 假设我们有一个可用的CUDA设备
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -57,7 +43,7 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
 
     cur_time = time.time()
     pre_time = time.time()
-    # writer = SummaryWriter('logs')
+
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -91,7 +77,7 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
             loss_train.backward()
             # 用优化器更新参数
             optimizer.step()
-            # writer.add_scalar("train_loss", loss_train.data, epoch)
+
             losses_train.append(loss_train.data)
 
             # validation
@@ -130,113 +116,4 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
 
         loss_epoch = loss_valid.cpu().data.numpy()
         losses_epoch.append(loss_epoch)
-    # writer.add_graph(kfgn_mamba, )
-    # writer.close()
     return kfgn_mamba, [losses_train, losses_interval_train, losses_valid, losses_interval_valid]
-
-
-def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
-    inputs, labels = next(iter(test_dataloader))
-    [batch_size, step_size, fea_size] = inputs.size()
-
-    cur_time = time.time()
-    pre_time = time.time()
-
-    use_gpu = torch.cuda.is_available()
-
-    loss_MSE = torch.nn.MSELoss()
-    loss_L1 = torch.nn.L1Loss()
-
-    tested_batch = 0
-
-    losses_mse = []
-    losses_l1 = []
-    MAEs = []
-    MAPEs = []
-    MSEs = []
-    RMSEs = []
-    VARs = []
-
-    # predictions = []
-    # ground_truths = []
-    writer = SummaryWriter('logs')
-    index = 0
-    for data in test_dataloader:
-        inputs, labels = data
-
-        if inputs.shape[0] != batch_size:
-            continue
-
-        if use_gpu:
-            inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
-        else:
-            inputs, labels = Variable(inputs), Variable(labels)
-        pred = kfgn_mamba(inputs)
-        if index == 0:
-            writer.add_graph(kfgn_mamba, inputs)
-            index += 1
-        labels = torch.squeeze(labels)
-
-        loss_mse = F.mse_loss(pred, labels)
-        loss_l1 = F.l1_loss(pred, labels)
-        MAE = torch.mean(torch.abs(pred - torch.squeeze(labels)))
-        MAPE = torch.mean(torch.abs(pred - torch.squeeze(labels)) / torch.abs(torch.squeeze(labels)))
-        # Calculate MAPE only for non-zero labels
-        non_zero_labels = torch.abs(labels) > 0
-        if torch.any(non_zero_labels):
-            MAPE_values = torch.abs(pred - torch.squeeze(labels)) / torch.abs(torch.squeeze(labels))
-            MAPE = torch.mean(MAPE_values[non_zero_labels])
-            MAPEs.append(MAPE.item())
-
-        MSE = torch.mean((torch.squeeze(labels) - pred) ** 2)
-        RMSE = math.sqrt(torch.mean((torch.squeeze(labels) - pred) ** 2))
-        VAR = 1 - (torch.var(torch.squeeze(labels) - pred)) / torch.var(torch.squeeze(labels))
-
-        losses_mse.append(loss_mse.item())
-        losses_l1.append(loss_l1.item())
-        MAEs.append(MAE.item())
-        MAPEs.append(MAPE.item())
-        MSEs.append(MSE.item())
-        RMSEs.append(RMSE)
-        VARs.append(VAR.item())
-
-        # predictions.append(pd.DataFrame(pred.cpu().data.numpy()))
-        # ground_truths.append(pd.DataFrame(labels.cpu().data.numpy()))
-
-        tested_batch += 1
-
-        if tested_batch % 100 == 0:
-            cur_time = time.time()
-            print('Tested #: {}, loss_l1: {}, loss_mse: {}, time: {}'.format(
-                tested_batch * batch_size,
-                # np.around([loss_l1.data[0]], decimals=8),
-                # np.around([loss_mse.data[0]], decimals=8),
-                # np.around([cur_time - pre_time], decimals=8)))
-                np.around([loss_l1.item()], decimals=8),
-                np.around([loss_mse.item()], decimals=8),
-                np.around([cur_time - pre_time], decimals=8)))
-            pre_time = cur_time
-    writer.close()
-    losses_l1 = np.array(losses_l1)
-    losses_mse = np.array(losses_mse)
-    MAEs = np.array(MAEs)
-    MAPEs = np.array(MAPEs)
-    MSEs = np.array(MSEs)
-    RMSEs = np.array(RMSEs)
-    VARs = np.array(VARs)
-
-    mean_l1 = np.mean(losses_l1) * max_speed
-    std_l1 = np.std(losses_l1) * max_speed
-    mean_mse = np.mean(losses_mse) * max_speed
-    MAE_ = np.mean(MAEs) * max_speed
-    std_MAE_ = np.std(
-        MAEs) * max_speed  # std_MAE measures the consistency & stability of the model's performance across different test sets or iterations. Usually if (std_MAE/MSE)<=10%., means the trained model is good.
-    MAPE_ = np.mean(MAPEs) * 100
-    MSE_ = np.mean(MSEs)
-    RMSE_ = np.mean(RMSEs) * max_speed
-    VAR_ = np.mean(VARs)
-    results = [MAE_, std_MAE_, MAPE_, MSE_, RMSE_, VAR_]
-    print(f'max_speed = {max_speed}')
-    print(f'np.mean(MAEs) = {np.mean(MAEs)}')
-    print(f'Tested: MAE: {MAE_}, std_MAE: {std_MAE_}, MAPE: {MAPE_}, MSE: {MSE_}, RMSE: {RMSE_}, VAR: {VAR_}')
-    return results
