@@ -241,19 +241,8 @@ class mLSTM(nn.Module):
         self.rql = nn.Linear(input_size + hidden_size, hidden_size)
         self.rol = nn.Linear(input_size + hidden_size, hidden_size)
 
-        # addtional vars
-        self.c = torch.nn.Parameter(torch.Tensor([1]))
-
-        self.fc1 = nn.Linear(64, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, hidden_size)
-        self.fc4 = nn.Linear(hidden_size, 64)
-        self.fc5 = nn.Linear(64, hidden_size)
-        self.fc6 = nn.Linear(hidden_size, hidden_size)
-        self.fc7 = nn.Linear(hidden_size, hidden_size)
-        self.fc8 = nn.Linear(hidden_size, 64)
-
     def forward(self, input, Normal_State=None, Cell_State=None, rNormal_State=None, rCell_State=None):
+        # TODO: 需要将生成Cell_State的步骤按照原本方式修改
         batch_size, time_steps, _ = input.shape
         if Normal_State is None:
             Normal_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
@@ -282,13 +271,13 @@ class mLSTM(nn.Module):
         combined = combined.view(dim1, dim2 // 4, dim3 * 4)
         ft = torch.exp(self.fl(combined))  # 线性层也相当于一个权重矩阵
         it = torch.exp(self.il(combined))
-        kt = self.kl(combined)/(self.hidden_size ** 0.5)
+        kt = self.kl(combined) / (self.hidden_size ** 0.5)
         vt = self.vl(combined)
         qt = self.ql(combined)
         ot = torch.sigmoid(self.ol(combined))
         Normal_State = Normal_State * ft + it * kt
         Cell_State = Cell_State * ft + kt * vt * it
-        ht = Cell_State * qt /max(Normal_State.T @ qt, 1)
+        ht = Cell_State * qt / max(torch.sum(Normal_State * qt), 1)  # Normal_State(batch_size, step, feature_size)
         Hidden_State = ht * ot
         rcombined = torch.cat((input, rNormal_State), 1)
         d1 = rcombined.shape[0]
@@ -296,15 +285,15 @@ class mLSTM(nn.Module):
         d3 = rcombined.shape[2]
         # rcombined只经过一次拼接得到，所以这里数字是2
         rcombined = rcombined.view(d1, d2 // 2, d3 * 2)
-        rft = torch.exp(self.fl(rcombined))  # 线性层也相当于一个权重矩阵
-        rit = torch.exp(self.il(rcombined))
-        rkt = self.kl(rcombined)/(self.hidden_size ** 0.5)
-        rvt = self.vl(rcombined)
-        rqt = self.ql(rcombined)
-        rot = torch.sigmoid(self.ol(rcombined))
+        rft = torch.exp(self.rfl(rcombined))  # 线性层也相当于一个权重矩阵
+        rit = torch.exp(self.ril(rcombined))
+        rkt = self.rkl(rcombined) / (self.hidden_size ** 0.5)
+        rvt = self.rvl(rcombined)
+        rqt = self.rql(rcombined)
+        rot = torch.sigmoid(self.rol(rcombined))
         rNormal_State = rNormal_State * rft + rit * rkt
         rCell_State = rCell_State * rft + rkt * rvt * rit
-        ht = rCell_State * rqt /max(rNormal_State.T @ rqt, 1)
+        ht = rCell_State * rqt / max(torch.sum(rNormal_State * rqt), 1)
         rHidden_State = ht * rot
         # Kalman Filtering
         # torch.var实际为计算张量所有元素的样本方差,
@@ -312,6 +301,119 @@ class mLSTM(nn.Module):
         # tensor与一个数进行/运算，实际为tensor中的每个元素除以这个数
         pred = (Hidden_State * var1 * self.c + rHidden_State * var2) / (var1 + var2 * self.c)
         return pred
+        # return Hidden_State, Cell_State, gc, rHidden_State, rCell_State, pred
+
+
+class sLSTM_Block(nn.Module):
+    def __init__(self, K, A, feature_size, Clamp_A=True, num_layer=2):
+        super().__init__()
+        self.layers = nn.ModuleList([sLSTM(K, A, feature_size, Clamp_A) for _ in range(num_layer)])
+        self.gc_list = self.layers[0].gc_list
+
+    def forward(self, input):
+        hidden_state, normal_state, cell_state = None, None, None
+        for layer in self.layers:
+            hidden_state, normal_state, cell_state = layer(input, hidden_state, normal_state, cell_state)
+        return hidden_state
+
+
+class sLSTM(nn.Module):
+    def __init__(self, K, A, feature_size, Clamp_A=True):
+        super().__init__()
+        self.feature_size = feature_size
+        self.hidden_size = feature_size
+        self.K = K  # K=3
+        self.A_list = []
+        # A是一个邻接矩阵
+        # torch.sum(A,0)把A沿第0轴的数全部加起来，得到一个1 * feature_size大小的矩阵
+        # torch.diag()则会将一维向量作为对角线构造对角矩阵，其余元素全为0
+        D_inverse = torch.diag(1 / torch.sum(A, 0))
+        # 矩阵乘法，对邻接矩阵进行度归一化
+        norm_A = torch.matmul(D_inverse, A)
+        A = norm_A
+        # 生成维数为feature_size的单位矩阵
+        A_temp = torch.eye(feature_size, feature_size)
+        for i in range(K):
+            A_temp = torch.matmul(A_temp, A)
+            if Clamp_A:
+                # 让A中的元素最大为1
+                A_temp = torch.clamp(A_temp, max=1.)
+            # A_list中装入度归一化后的邻接矩阵与单位矩阵相乘的结果
+            self.A_list.append(A_temp)
+
+        self.gc_list = nn.ModuleList(
+            # gc_list中包含K个DynamicFilterGNN，区别在于构建时取不同的A_list中的矩阵
+            [DynamicFilterGNN(feature_size, feature_size, self.A_list[i], bias=False) for i in range(K)])
+        hidden_size = self.feature_size
+        gc_input_size = self.feature_size * K
+
+        self.wf = nn.Linear(gc_input_size + hidden_size, hidden_size, bias=False)
+        self.rf = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.bf = nn.Parameter(torch.zeros(hidden_size))
+        self.wi = nn.Linear(gc_input_size + hidden_size, hidden_size, bias=False)
+        self.ri = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.bi = nn.Parameter(torch.zeros(hidden_size))
+        self.wz = nn.Linear(gc_input_size + hidden_size, hidden_size, bias=False)
+        self.rz = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.bz = nn.Parameter(torch.zeros(hidden_size))
+        self.wo = nn.Linear(gc_input_size + hidden_size, hidden_size, bias=False)
+        self.ro = nn.Linear(hidden_size, hidden_size, bias=False)
+        self.bo = nn.Parameter(torch.zeros(hidden_size))
+
+        # 创建一个feature_size长度的一维张量
+        self.Neighbor_weight = Parameter(torch.FloatTensor(feature_size))
+        stdv = 1. / math.sqrt(feature_size)
+        # 重新设置张量中的值
+        self.Neighbor_weight.data.uniform_(-stdv, stdv)
+
+    def forward(self, input, Hidden_State=None, Normal_State=None, Cell_State=None):
+        # TODO: 首先使用单纯的sLSTM加上本来的计算NC的方法实现前向传播，也就是去掉residual的部分
+        batch_size, time_steps, _ = input.shape
+        if Hidden_State is None:
+            Hidden_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+            # 将这四个张量增加一维并将序号为1的维度增加为time_steps
+            Hidden_State = Hidden_State.unsqueeze(1).expand(-1, time_steps, -1)
+        if Normal_State is None:
+            Normal_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+            Normal_State = Normal_State.unsqueeze(1).expand(-1, time_steps, -1)
+        if Cell_State is None:
+            Cell_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+            Cell_State = Cell_State.unsqueeze(1).expand(-1, time_steps, -1)
+        # if rHidden_State is None:
+        #     rHidden_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+        # if rNormal_State is None:
+        #     rNormal_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+        # if rCell_State is None:
+        #     rCell_State = Variable(torch.zeros(batch_size, self.feature_size).cuda())
+
+        # rHidden_State = rHidden_State.unsqueeze(1).expand(-1, time_steps, -1)
+        # rNormal_State = rNormal_State.unsqueeze(1).expand(-1, time_steps, -1)
+        # rCell_State = rCell_State.unsqueeze(1).expand(-1, time_steps, -1)
+        x = input
+        gc = self.gc_list[0](x)
+        for i in range(1, self.K):
+            # 沿着第一维拼接gc_list中的模型输出
+            gc = torch.cat((gc, self.gc_list[i](x)), 1)
+
+        combined = torch.cat((gc, Normal_State), 1)
+        dim1 = combined.shape[0]
+        dim2 = combined.shape[1]
+        dim3 = combined.shape[2]
+        # 修改combined的维度
+        combined = combined.view(dim1, dim2 // 4, dim3 * 4)
+        ft = torch.sigmoid(self.wf(combined) + self.rf(Hidden_State) + self.bf)
+        it = torch.exp(self.wi(combined) + self.ri(Hidden_State) + self.bi)
+        # φ()暂时认为是tanh激活函数
+        zt = torch.tanh(self.wz(combined) + self.rz(Hidden_State) + self.bz)
+        ot = torch.sigmoid(self.wo(combined) + self.ro(Hidden_State) + self.bo)
+        NC = torch.mul(Cell_State,
+                       torch.mv(Variable(self.A_list[-1], requires_grad=False).cuda(), self.Neighbor_weight))
+        Cell_State = NC * ft + it * zt
+        Normal_State = Normal_State * ft + it
+        Hidden_State = ot * (Cell_State / Normal_State)
+        # TODO:更换block模式记得修改此处
+        # return Hidden_State
+        return Hidden_State, Normal_State, Cell_State
         # return Hidden_State, Cell_State, gc, rHidden_State, rCell_State, pred
 
 
@@ -331,6 +433,7 @@ class ModelArgs:
     K: int = 3
     A: torch.Tensor = None
     feature_size: int = None
+    kfgn_mode: str = 'lstm'
 
     # __post_init__在_init_函数后被调用
     def __post_init__(self):
@@ -343,7 +446,18 @@ class KFGN_Mamba(nn.Module):
     def __init__(self, args: ModelArgs):
         super().__init__()
         self.args = args
-        self.kfgn = KFGN(K=args.K, A=args.A, feature_size=args.feature_size)
+        if self.args.kfgn_mode == 'lstm':
+            self.kfgn = KFGN(K=args.K, A=args.A, feature_size=args.feature_size)
+            print('lstm mode')
+        elif args.kfgn_mode == 'slstm':
+            self.kfgn = sLSTM(K=args.K, A=args.A, feature_size=args.feature_size)
+            print('slstm mode')
+        elif args.kfgn_mode == 'slstm_block':
+            self.kfgn = sLSTM_Block(K=args.K, A=args.A, feature_size=args.feature_size)
+            print('slstm_block mode')
+        else:
+            print('mLstm mode')
+            self.kfgn = mLSTM(K=args.K, A=args.A, feature_size=args.feature_size)
         self.encode = nn.Linear(args.features, args.d_model)
         self.encoder_layers = nn.ModuleList([ResidualBlock(args, self.kfgn) for _ in range(args.n_layer)])
         self.encoder_norm = RMSNorm(args.d_model)
@@ -372,10 +486,18 @@ class KFGN_Mamba(nn.Module):
 
 # Residual Block in Mamba Model
 class ResidualBlock(nn.Module):
-    def __init__(self, args: ModelArgs, kfgn: KFGN):
+    def __init__(self, args: ModelArgs, kfgn):
         super().__init__()
         self.args = args
-        self.kfgn = KFGN(K=args.K, A=args.A, feature_size=args.feature_size)
+        # self.kfgn = KFGN(K=args.K, A=args.A, feature_size=args.feature_size)
+        if args.kfgn_mode == 'lstm':
+            self.kfgn = KFGN(K=args.K, A=args.A, feature_size=args.feature_size)
+        elif args.kfgn_mode == 'slstm':
+            self.kfgn = sLSTM(K=args.K, A=args.A, feature_size=args.feature_size)
+        elif args.kfgn_mode == 'slstm_block':
+            self.kfgn = sLSTM_Block(K=args.K, A=args.A, feature_size=args.feature_size)
+        else:
+            self.kfgn = mLSTM(K=args.K, A=args.A, feature_size=args.feature_size)
         self.mixer = MambaBlock(args, kfgn)
         self.norm = RMSNorm(args.d_model)
 
@@ -390,7 +512,7 @@ class ResidualBlock(nn.Module):
 
 
 class MambaBlock(nn.Module):
-    def __init__(self, args: ModelArgs, kfgn: KFGN):
+    def __init__(self, args: ModelArgs, kfgn):
         super().__init__()
         self.args = args
         self.kfgn = kfgn
