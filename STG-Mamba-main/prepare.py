@@ -1,3 +1,5 @@
+import os
+
 import torch.utils.data as utils
 import numpy as np
 import torch
@@ -23,7 +25,7 @@ def PrepareDataset(speed_matrix, BATCH_SIZE=48, seq_len=12, pred_len=12, train_p
     # MinMax Normalization Method.
     max_speed = speed_matrix.max().max()
     min_speed = speed_matrix.min().min()
-    # speed_matrix = (speed_matrix - min_speed) / (max_speed - min_speed)  # 归一化
+    speed_matrix = (speed_matrix - min_speed) / (max_speed - min_speed)  # 归一化
 
     speed_sequences, speed_labels = [], []
     for i in range(time_len - seq_len - pred_len):
@@ -51,6 +53,10 @@ def PrepareDataset(speed_matrix, BATCH_SIZE=48, seq_len=12, pred_len=12, train_p
     valid_data, valid_label = torch.Tensor(valid_data), torch.Tensor(valid_label)
     test_data, test_label = torch.Tensor(test_data), torch.Tensor(test_label)
 
+    torch.save((train_data, train_label), 'train_set.pth')
+    torch.save((valid_data, valid_label), 'valid_set.pth')
+    torch.save((test_data, test_label), 'test_set.pth')
+
     train_dataset = utils.TensorDataset(train_data, train_label)
     valid_dataset = utils.TensorDataset(valid_data, valid_label)
     test_dataset = utils.TensorDataset(test_data, test_label)
@@ -60,3 +66,27 @@ def PrepareDataset(speed_matrix, BATCH_SIZE=48, seq_len=12, pred_len=12, train_p
     test_dataloader = utils.DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
     # drop_last=True时，如果数据集的大小不能被batch_size整除，那么DataLoader将不会返回最后一个不完整的批次。
     return train_dataloader, valid_dataloader, test_dataloader, max_speed
+def load_dataset(BATCH_SIZE=48):
+    train_data, train_label = torch.load('train_set.pth')
+    valid_data, valid_label = torch.load('valid_set.pth')
+    test_data, test_label = torch.load('test_set.pth')
+    train_dataset = utils.TensorDataset(train_data, train_label)
+    valid_dataset = utils.TensorDataset(valid_data, valid_label)
+    test_dataset = utils.TensorDataset(test_data, test_label)
+
+    train_dataloader = utils.DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+    valid_dataloader = utils.DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+    test_dataloader = utils.DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+
+    return train_dataloader, valid_dataloader, test_dataloader
+
+
+def get_dataloader(speed_matrix, BATCH_SIZE=48):
+    file_name = 'train_set.pth'
+    for root, dirs, files in os.walk(os.getcwd()):
+        if file_name in files:
+            # 找到文件，返回其完整路径
+            print('从文件中加载数据集')
+            return load_dataset(BATCH_SIZE)
+    train_dataloader, valid_dataloader, test_dataloader, max_value = PrepareDataset(speed_matrix, BATCH_SIZE)
+    return train_dataloader, valid_dataloader, test_dataloader
