@@ -44,22 +44,21 @@ elif args.dataset == 'hz_metro':
 
 print("\nPreparing train/test data...")
 # train_dataloader, valid_dataloader, test_dataloader, max_value_speed = PrepareDataset(speed_matrix, BATCH_SIZE=64)
-train_dataloader, valid_dataloader, test_dataloader, max_value = PrepareDataset(speed_matrix, BATCH_SIZE=6)
+train_dataloader, valid_dataloader, test_dataloader = get_dataloader(speed_matrix, BATCH_SIZE=48)
 
 # models you want to use
 if args.model == 'STGmamba':
     print("\nTraining STGmamba model...")
+    STGmamba, STGmamba_loss = TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=40,
+                                             mamba_features=args.mamba_features)
     if args.methods == 'laptop':
-        model = torch.load('model/STGmamba_model.pth')
-        STGmamba, STGmamba_loss = laptop_train.laptop_train_mamba(model, train_dataloader, valid_dataloader, A, K=3,
-                                                                  num_epochs=45,
-                                                                  mamba_features=args.mamba_features)
-    else:
-        STGmamba, STGmamba_loss = TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=40,
-                                                 mamba_features=args.mamba_features)
+        for i in range(2):
+            STGmamba, STGmamba_loss = laptop_train.laptop_train_mamba(STGmamba, train_dataloader, valid_dataloader, A, K=3,
+                                                                      num_epochs=45,
+                                                                      mamba_features=args.mamba_features)
     torch.save(STGmamba, 'model/STGmamba_model.pth')  # 其中model是你的模型实例
     print("\nTesting STGmamba model...")
-    results = TestSTG_Mamba(STGmamba, test_dataloader, max_value)  # max_value为矩阵中最大的一个值
+    results = TestSTG_Mamba(STGmamba, test_dataloader)  # max_value为矩阵中最大的一个值
 
 
 elif args.model == 'lstm':

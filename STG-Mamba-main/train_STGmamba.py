@@ -1,3 +1,5 @@
+import os
+import sys
 import time
 import numpy as np
 import math
@@ -19,17 +21,29 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
     input_dim = fea_size
     hidden_dim = fea_size
     output_dim = fea_size
-    kfgn_mamba_args = ModelArgs(
-        K=K,
-        A=torch.Tensor(A),
-        feature_size=A.shape[0],  # 特征数量
-        d_model=fea_size,  # hidden_dim is fea_size
-        n_layer=4,
-        features=mamba_features
-    )
-    print(f'feature_size = {A.shape[0]}, d_model = {fea_size}, features = {mamba_features}')
+    model_name = 'STGmamba_model.pth'
+    load_model = False
+    for root, dirs, files in os.walk('model'):
+        if model_name in files:
+            # 找到文件，返回其完整路径
+            load_model = True
+    if load_model:
+        kfgn_mamba = torch.load('model/STGmamba_model.pth')
+        print('加载已有模型训练')
+    else:
+        kfgn_mamba_args = ModelArgs(
+            K=K,
+            A=torch.Tensor(A),
+            feature_size=A.shape[0],
+            d_model=fea_size,  # hidden_dim is fea_size
+            n_layer=4,
+            features=mamba_features,
+            kfgn_mode='slstm_block'
+        )
+        kfgn_mamba = KFGN_Mamba(kfgn_mamba_args)
+        print('创建新模型训练')
+    # print(f'feature_size = {A.shape[0]}, d_model = {fea_size}, features = {mamba_features}')
     # 实际打印出的结果：feature_size = 184, d_model = 184, features = 184，三个值都一样
-    kfgn_mamba = KFGN_Mamba(kfgn_mamba_args)
     kfgn_mamba.cuda()  # 似乎不是推荐的代码，以下是更推荐的写法
     # 假设我们有一个可用的CUDA设备
     # device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
@@ -57,7 +71,8 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
 
     cur_time = time.time()
     pre_time = time.time()
-    # writer = SummaryWriter('logs')
+    writer = SummaryWriter('logs')
+    num_train = 0
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -84,14 +99,17 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
             labels = torch.squeeze(labels)  # 删除大小为1的维度
             # 实际上是调用了模型的forward函数
             pred = kfgn_mamba(inputs)  # Updated to use new model
-
             loss_train = loss_MSE(pred, labels)
-
+            # if torch.isnan(loss_train):
+            #     print('loss_train is nan')
+            #     print(pred)
+            #     print(labels)
+            #     sys.exit(1)
             optimizer.zero_grad()
             loss_train.backward()
             # 用优化器更新参数
             optimizer.step()
-            # writer.add_scalar("train_loss", loss_train.data, epoch)
+            writer.add_scalar("sLSTM_block2_train_loss", loss_train.data, num_train)
             losses_train.append(loss_train.data)
 
             # validation
@@ -111,13 +129,16 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
             pred = kfgn_mamba(inputs_val)
             loss_valid = loss_MSE(pred, labels_val)
             losses_valid.append(loss_valid.data)
-
+            writer.add_scalar("sLSTM_block2_valid_loss", loss_valid.data, num_train)
+            num_train += 1
             trained_number += 1
 
             if trained_number % interval == 0:
                 cur_time = time.time()
                 # 打印的数据需要转移到cpu上进行操作
                 loss_interval_train = np.around(sum(losses_train[-interval:]).cpu().numpy() / interval, decimals=8)
+                # if np.isnan(loss_interval_train):
+                #     print(losses_train[-interval:])
                 losses_interval_train.append(loss_interval_train)
                 loss_interval_valid = np.around(sum(losses_valid[-interval:]).cpu().numpy() / interval, decimals=8)
                 losses_interval_valid.append(loss_interval_valid)
@@ -131,11 +152,11 @@ def TrainSTG_Mamba(train_dataloader, valid_dataloader, A, K=3, num_epochs=1, mam
         loss_epoch = loss_valid.cpu().data.numpy()
         losses_epoch.append(loss_epoch)
     # writer.add_graph(kfgn_mamba, )
-    # writer.close()
+    writer.close()
     return kfgn_mamba, [losses_train, losses_interval_train, losses_valid, losses_interval_valid]
 
 
-def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
+def TestSTG_Mamba(kfgn_mamba, test_dataloader):
     inputs, labels = next(iter(test_dataloader))
     [batch_size, step_size, fea_size] = inputs.size()
 
@@ -159,7 +180,7 @@ def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
 
     # predictions = []
     # ground_truths = []
-    writer = SummaryWriter('logs')
+    # writer = SummaryWriter('logs')
     index = 0
     for data in test_dataloader:
         inputs, labels = data
@@ -172,9 +193,9 @@ def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
         else:
             inputs, labels = Variable(inputs), Variable(labels)
         pred = kfgn_mamba(inputs)
-        if index == 0:
-            writer.add_graph(kfgn_mamba, inputs)
-            index += 1
+        # if index == 0:
+        #     writer.add_graph(kfgn_mamba, inputs)
+        #     index += 1
         labels = torch.squeeze(labels)
 
         loss_mse = F.mse_loss(pred, labels)
@@ -216,7 +237,7 @@ def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
                 np.around([loss_mse.item()], decimals=8),
                 np.around([cur_time - pre_time], decimals=8)))
             pre_time = cur_time
-    writer.close()
+    # writer.close()
     losses_l1 = np.array(losses_l1)
     losses_mse = np.array(losses_mse)
     MAEs = np.array(MAEs)
@@ -225,18 +246,17 @@ def TestSTG_Mamba(kfgn_mamba, test_dataloader, max_speed):
     RMSEs = np.array(RMSEs)
     VARs = np.array(VARs)
 
-    mean_l1 = np.mean(losses_l1) * max_speed
-    std_l1 = np.std(losses_l1) * max_speed
-    mean_mse = np.mean(losses_mse) * max_speed
-    MAE_ = np.mean(MAEs) * max_speed
+    mean_l1 = np.mean(losses_l1)
+    std_l1 = np.std(losses_l1)
+    mean_mse = np.mean(losses_mse)
+    MAE_ = np.mean(MAEs)
     std_MAE_ = np.std(
-        MAEs) * max_speed  # std_MAE measures the consistency & stability of the model's performance across different test sets or iterations. Usually if (std_MAE/MSE)<=10%., means the trained model is good.
-    MAPE_ = np.mean(MAPEs) * 100
+        MAEs)  # std_MAE measures the consistency & stability of the model's performance across different test sets or iterations. Usually if (std_MAE/MSE)<=10%., means the trained model is good.
+    MAPE_ = np.mean(MAPEs)
     MSE_ = np.mean(MSEs)
-    RMSE_ = np.mean(RMSEs) * max_speed
+    RMSE_ = np.mean(RMSEs)
     VAR_ = np.mean(VARs)
     results = [MAE_, std_MAE_, MAPE_, MSE_, RMSE_, VAR_]
-    print(f'max_speed = {max_speed}')
     print(f'np.mean(MAEs) = {np.mean(MAEs)}')
     print(f'Tested: MAE: {MAE_}, std_MAE: {std_MAE_}, MAPE: {MAPE_}, MSE: {MSE_}, RMSE: {RMSE_}, VAR: {VAR_}')
     return results
